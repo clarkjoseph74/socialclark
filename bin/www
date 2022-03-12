@@ -1,0 +1,201 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+var app = require("../app");
+var debug = require("debug")("shopping-api:server");
+var http = require("http");
+var uuid = require("uuid");
+
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || "3000");
+app.set("port", port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+var io = require("socket.io")(server);
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+const Room = require("../models/room");
+const User = require("../models/user");
+const e = require("cors");
+const { Console, assert } = require("console");
+const roomID = uuid.v4();
+var clients = new Map();
+io.on("connection", (socket) => {
+  console.log("Socket Connecting ____ _ _");
+  console.log(socket.id, " Has Joined");
+
+  socket.on("/saveSocket", (userId) => {
+    console.log("SIGNINSOCKET TO " + userId);
+    clients.set(userId, socket);
+    console.log(clients);
+  });
+
+  socket.on("/message", (message) => {
+    console.log(message);
+    User.findById(message.sourceId)
+      .then((user) => {
+        Room.findById(user.chatRooms.get(message.targetId))
+          .then((room) => {
+            room.messages.push({ msg: message.msg, source: message.sourceId });
+            room
+              .save()
+              .then((res) => {
+                console.log(clients.get(message.targetId) != null);
+                if (clients.get(message.targetId) != null)
+                  clients
+                    .get(message.targetId)
+                    .emit("/recieveMessage", message);
+              })
+              .catch((err) => console.log(err));
+          })
+          .catch((err) => console.log(err));
+      })
+      .catch((err) => console.log(err));
+  });
+  socket.on("/getRooms", (userId) => {
+    User.findById(userId)
+      .populate("chatRooms")
+      .then((user) => {
+        console.log(user.chatRooms);
+        socket.emit("/retriveRooms", user.chatRooms);
+      })
+      .catch((err) => console.log(err));
+  });
+  socket.on("/startChat", (users) => {
+    User.findById(users.first)
+      .then((firstUser) => {
+        if (firstUser.chatRooms.get(users.second) != null) {
+          console.log("________________ IN ROOM ______________");
+          Room.findById(firstUser.chatRooms.get(users.second))
+            .then((room) => {
+              console.log(room);
+              console.log(last(room.messages));
+
+              socket.emit("/getChat", room);
+            })
+            .catch((err) => console.log(err));
+        } else {
+          console.log("________________ Create ROOM ______________");
+
+          const newRoom = Room({
+            roomId: roomID,
+            firstUser: users.first,
+            secondUser: users.second,
+            lastSeenFromBool: false,
+            messages: [],
+          });
+          newRoom
+            .save()
+            .then((newRoom) => {
+              socket.emit("/getChat", newRoom);
+            })
+            .catch((err) => console.log(err));
+          User.findById(users.first)
+            .then((user) => {
+              //   user.chatRooms[users.second] = roomID;
+              user.chatRooms.set(users.second, newRoom.id);
+
+              user.save();
+            })
+            .catch((err) => console.log(err));
+          User.findById(users.second)
+            .then((user) => {
+              user.chatRooms.set(users.first, newRoom.id);
+
+              // user.chatRooms[users.first] = roomID;
+              user.save();
+            })
+            .catch((err) => console.log(err));
+        }
+      })
+      .catch((err) => console.log(err));
+
+    // if (users == null) {
+    //   newRoom
+    //     .save()
+    //     .then((result) => {
+    //       socket.emit("/getChat", result);
+    //     })
+    //     .catch((err) => console.log(err));
+    // } else {
+    //   Room.find({ id: room.roomID })
+    //     .then((result) => {
+    //       socket.emit("/getChat", result);
+    //     })
+    //     .catch((err) => console.log(err));
+    // }
+  });
+});
+
+function last(array) {
+  return array[array.length - 1];
+}
+server.listen(port);
+server.on("error", onError);
+server.on("listening", onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== "listen") {
+    throw error;
+  }
+
+  var bind = typeof port === "string" ? "Pipe " + port : "Port " + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case "EACCES":
+      console.error(bind + " requires elevated privileges");
+      process.exit(1);
+    case "EADDRINUSE":
+      console.error(bind + " is already in use");
+      process.exit(1);
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === "string" ? "pipe " + addr : "port " + addr.port;
+  debug("Listening on " + bind);
+}
